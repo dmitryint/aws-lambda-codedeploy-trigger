@@ -51,7 +51,7 @@ jobs:
             > "lambda-codedeploy-trigger_${{ steps.version.outputs.version }}_linux_${{ matrix.goarch }}.zip.sha256"
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/lambda-codedeploy-trigger_${{ steps.version.outputs.version }}_linux_${{ matrix.goarch }}.zip
