@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 200" role="img" aria-label="aws-lambda-codedeploy-trigger">
+  <title>aws-lambda-codedeploy-trigger</title>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="22">
+    <!-- lambda -->
+    <g stroke="#FF9900">
+      <path d="M 120 50 L 180 170"/>
+      <path d="M 150 110 L 70 170"/>
+    </g>
+
+    <!-- arrow -->
+    <g stroke="#5A6677">
+      <path d="M 230 110 L 330 110"/>
+      <path d="M 315 92 L 332 110 L 315 128"/>
+    </g>
+
+    <!-- check -->
+    <g stroke="#3FCF8E">
+      <path d="M 390 118 L 435 162 L 530 55"/>
+    </g>
+  </g>
+</svg>
