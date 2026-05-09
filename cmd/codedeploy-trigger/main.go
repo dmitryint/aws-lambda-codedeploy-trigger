@@ -68,7 +68,7 @@ func waitForDeployment(ctx context.Context, svc *codedeploy.Client, deploymentID
 		case <-ctx.Done():
 			// Surface a structured error including the deployment ID so the
 			// caller (e.g. Terraform) can investigate the in-flight deployment.
-			return info, fmt.Errorf("context cancelled while waiting for deployment %s (last status: %s): %w", deploymentID, info.Status, ctx.Err())
+			return info, fmt.Errorf("context canceled while waiting for deployment %s (last status: %s): %w", deploymentID, info.Status, ctx.Err())
 		case <-ticker.C:
 		}
 	}
