@@ -195,7 +195,7 @@ make test             # runs unit tests with -race
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run `make test` and `go vet ./...` before opening a PR.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, coding conventions, and PR checklist.
 
 ## License
 
