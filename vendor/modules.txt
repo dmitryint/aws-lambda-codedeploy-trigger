@@ -58,7 +58,7 @@ github.com/aws/aws-sdk-go-v2/internal/endpoints/v2
 github.com/aws/aws-sdk-go-v2/internal/v4a
 github.com/aws/aws-sdk-go-v2/internal/v4a/internal/crypto
 github.com/aws/aws-sdk-go-v2/internal/v4a/internal/v4
-# github.com/aws/aws-sdk-go-v2/service/codedeploy v1.36.6
+# github.com/aws/aws-sdk-go-v2/service/codedeploy v1.37.1
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/codedeploy
 github.com/aws/aws-sdk-go-v2/service/codedeploy/internal/endpoints
