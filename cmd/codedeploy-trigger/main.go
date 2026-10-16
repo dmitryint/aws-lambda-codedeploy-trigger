@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -12,15 +10,14 @@ import (
 	"github.com/dmitryint/aws-lambda-codedeploy-trigger/pkg/deploy"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/codedeploy"
-	"github.com/aws/aws-sdk-go-v2/service/codedeploy/types"
 )
 
 const (
 	defaultPollInterval = 15 * time.Second
 	pollIntervalEnv     = "POLL_INTERVAL_SECONDS"
+	deadlineMargin      = 5 * time.Second
 )
 
 // revision is overridden at link time via -ldflags "-X main.revision=...".
@@ -38,100 +35,39 @@ func pollInterval() time.Duration {
 	return time.Duration(n) * time.Second
 }
 
-func waitForDeployment(ctx context.Context, svc *codedeploy.Client, deploymentID string, interval time.Duration) (*types.DeploymentInfo, error) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		out, err := svc.GetDeployment(ctx, &codedeploy.GetDeploymentInput{
-			DeploymentId: aws.String(deploymentID),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("get deployment %s: %w", deploymentID, err)
-		}
-
-		info := out.DeploymentInfo
-		log.Printf("deployment %s status: %s", deploymentID, info.Status)
-
-		switch info.Status {
-		case types.DeploymentStatusSucceeded:
-			return info, nil
-		case types.DeploymentStatusFailed, types.DeploymentStatusStopped:
-			reason := ""
-			if info.ErrorInformation != nil && info.ErrorInformation.Message != nil {
-				reason = ": " + *info.ErrorInformation.Message
-			}
-			return info, fmt.Errorf("deployment %s ended with status %s%s", deploymentID, info.Status, reason)
-		}
-
-		select {
-		case <-ctx.Done():
-			// Surface a structured error including the deployment ID so the
-			// caller (e.g. Terraform) can investigate the in-flight deployment.
-			return info, fmt.Errorf("context canceled while waiting for deployment %s (last status: %s): %w", deploymentID, info.Status, ctx.Err())
-		case <-ticker.C:
-		}
-	}
+type handler struct {
+	codeDeploy   codeDeployAPI
+	pollInterval time.Duration
 }
 
-func handleRequest(ctx context.Context, event deploy.Event) (deploy.Result, error) {
-	if event.ApplicationName == nil || *event.ApplicationName == "" {
-		return deploy.Result{}, errors.New("applicationName is required")
+func (h handler) handleRequest(ctx context.Context, event deploy.Event) (deploy.Result, error) {
+	if shouldWait(event) {
+		var cancel context.CancelFunc
+		ctx, cancel = withDeadlineMargin(ctx)
+		defer cancel()
 	}
-	if event.DeploymentGroupName == nil || *event.DeploymentGroupName == "" {
-		return deploy.Result{}, errors.New("deploymentGroupName is required")
-	}
-	if event.Revision == nil {
-		return deploy.Result{}, errors.New("revision is required")
-	}
+	return runCodeDeploy(ctx, h.codeDeploy, event, h.pollInterval)
+}
 
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		return deploy.Result{}, fmt.Errorf("load AWS SDK config: %w", err)
+func withDeadlineMargin(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) <= deadlineMargin {
+		return context.WithCancel(ctx)
 	}
-
-	svc := codedeploy.NewFromConfig(cfg)
-
-	out, err := svc.CreateDeployment(ctx, &codedeploy.CreateDeploymentInput{
-		ApplicationName:               event.ApplicationName,
-		DeploymentGroupName:           event.DeploymentGroupName,
-		Revision:                      event.Revision,
-		Description:                   event.Description,
-		IgnoreApplicationStopFailures: aws.ToBool(event.IgnoreApplicationStopFailures),
-		AutoRollbackConfiguration:     event.AutoRollbackConfiguration,
-	})
-	if err != nil {
-		return deploy.Result{}, fmt.Errorf("create deployment: %w", err)
-	}
-
-	res := deploy.Result{
-		DeploymentID: aws.ToString(out.DeploymentId),
-		Status:       string(types.DeploymentStatusCreated),
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-	}
-
-	wait := true
-	if event.Wait != nil {
-		wait = *event.Wait
-	}
-	if !wait {
-		return res, nil
-	}
-
-	info, waitErr := waitForDeployment(ctx, svc, res.DeploymentID, pollInterval())
-	if info != nil {
-		res.Status = string(info.Status)
-		if info.CompleteTime != nil {
-			res.CompletedAt = info.CompleteTime.UTC().Format(time.RFC3339)
-		}
-	}
-	if waitErr != nil {
-		return res, waitErr
-	}
-	return res, nil
+	return context.WithDeadline(ctx, deadline.Add(-deadlineMargin))
 }
 
 func main() {
 	log.Printf("aws-lambda-codedeploy-trigger %s", revision)
-	lambda.Start(handleRequest)
+
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatalf("load AWS SDK config: %v", err)
+	}
+
+	h := handler{
+		codeDeploy:   codedeploy.NewFromConfig(cfg),
+		pollInterval: pollInterval(),
+	}
+	lambda.Start(h.handleRequest)
 }
