@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- When waiting, the handler stops 5 seconds before the Lambda timeout, so the error with the deployment ID and last status reaches the caller instead of a bare `Task timed out`.
+- The timeout error keeps the last observed status when the deadline is reached during a `GetDeployment` call.
+
+### Changed
+
+- The CodeDeploy client is created once per Lambda execution environment instead of on every invocation. A broken AWS SDK configuration now fails the function's initialization.
+
 ## [0.1.0] - 2026-05-09
 
 ### Added
