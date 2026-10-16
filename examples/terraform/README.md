@@ -18,6 +18,24 @@ module "codedeploy_trigger" {
 }
 ```
 
+For the ECS trigger, grant the services instead of (or next to) the CodeDeploy roles:
+
+```hcl
+module "codedeploy_trigger" {
+  source = "github.com/dmitryint/aws-lambda-codedeploy-trigger//examples/terraform"
+
+  release_version = var.release_version
+
+  ecs_service_arns = [
+    "arn:aws:ecs:us-east-1:123456789012:service/my-cluster/my-service",
+  ]
+  ecs_pass_role_arns = [
+    "arn:aws:iam::123456789012:role/my-service-task",
+    "arn:aws:iam::123456789012:role/my-service-execution",
+  ]
+}
+```
+
 ## Inputs
 
 | Name | Description | Default |
@@ -29,6 +47,8 @@ module "codedeploy_trigger" {
 | `memory_size` | Lambda memory in MB | `128` |
 | `poll_interval_seconds` | `POLL_INTERVAL_SECONDS` env var | `15` |
 | `codedeploy_service_role_arns` | Service role ARNs the Lambda may `iam:PassRole` | `[]` |
+| `ecs_service_arns` | ECS service ARNs the Lambda may describe and update, plus their service deployments | `[]` |
+| `ecs_pass_role_arns` | Task and task execution role ARNs the Lambda may `iam:PassRole` to `ecs-tasks.amazonaws.com` | `[]` |
 
 ## Outputs
 

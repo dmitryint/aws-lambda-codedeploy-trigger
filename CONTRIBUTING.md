@@ -28,7 +28,8 @@ For security issues, do **not** open a public issue. Email the maintainer (see `
 | `cmd/codedeploy-trigger/` | Lambda entry point (`main.go`). |
 | `pkg/deploy/` | `Event` (request) and `Result` (response) JSON schemas — **public API**. |
 | `examples/terraform/` | Provisions the Lambda from a release artifact. |
-| `examples/terraform-ecs-blue-green/` | End-to-end ECS Blue/Green flow. |
+| `examples/terraform-ecs-blue-green/` | End-to-end ECS Blue/Green flow through CodeDeploy. |
+| `examples/terraform-ecs-native-blue-green/` | ECS native blue/green service driven by the ECS trigger. |
 | `vendor/` | Committed. Always build and test with `-mod=vendor`. |
 
 ## Development workflow
@@ -56,6 +57,8 @@ terraform -chdir=examples/terraform init -backend=false
 terraform -chdir=examples/terraform validate
 terraform -chdir=examples/terraform-ecs-blue-green init -backend=false
 terraform -chdir=examples/terraform-ecs-blue-green validate
+terraform -chdir=examples/terraform-ecs-native-blue-green init -backend=false
+terraform -chdir=examples/terraform-ecs-native-blue-green validate
 ```
 
 ### Vendoring
@@ -73,8 +76,8 @@ Commit the `vendor/` changes alongside the `go.mod` / `go.sum` updates.
 ## Coding conventions
 
 - **Wire format is public API.** `pkg/deploy.Event` and `pkg/deploy.Result` JSON shapes are consumed by Terraform users. Adding optional fields is non-breaking; renaming or removing requires a major version bump (or a `0.x` minor pre-1.0). Discuss in an issue first.
-- Event JSON keys are lower-camel-case and mirror AWS CodeDeploy `CreateDeployment` (`applicationName`, `deploymentGroupName`, `revision`, …). Do not deviate.
-- Errors from `CreateDeployment` / `GetDeployment` are wrapped with the deployment ID so callers can locate the in-flight deployment in the AWS console.
+- Event JSON keys are lower-camel-case and mirror AWS CodeDeploy `CreateDeployment` (`applicationName`, `deploymentGroupName`, `revision`, …) for the CodeDeploy variant and Amazon ECS `UpdateService` (`cluster`, `service`, `taskDefinition`, …) for the ECS variant. Do not deviate.
+- Errors from `CreateDeployment` / `GetDeployment` are wrapped with the deployment ID, and errors from `DescribeServiceDeployments` with the service deployment ARN, so callers can locate the in-flight deployment in the AWS console.
 - Polling loops MUST respect `ctx.Done()`. The 15-minute Lambda ceiling surfaces as context cancellation; the surfaced error must include the deployment ID and the last observed status.
 - AWS region is read from the standard Lambda environment — do not require explicit `AWS_REGION` / `AWS_DEFAULT_REGION` configuration.
 - The handler returns a struct (`pkg/deploy.Result`) — never a plain string.
@@ -87,7 +90,7 @@ Commit the `vendor/` changes alongside the `go.mod` / `go.sum` updates.
 - Unit tests live next to the code (`*_test.go`).
 - Cover both happy path and failure paths — especially around the polling loop, context cancellation, and the JSON wire format.
 - Tests must be deterministic and run under `-race`.
-- Do not depend on real AWS calls; stub the CodeDeploy client behind an interface.
+- Do not depend on real AWS calls; stub the CodeDeploy and ECS clients behind their interfaces.
 
 ## Commit messages
 

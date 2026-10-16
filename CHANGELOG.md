@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Amazon ECS native deployment trigger for services on the `ECS` deployment controller, with any strategy including `BLUE_GREEN`. An event with `cluster`, `service`, `taskDefinition` and optional `forceNewDeployment` calls `UpdateService`, then polls `DescribeServiceDeployments` until the started service deployment is `SUCCESSFUL`, and fails on `ROLLBACK_SUCCESSFUL`, `ROLLBACK_FAILED` or `STOPPED`.
+- Result fields `trigger`, `serviceDeploymentArn`, `lifecycleStage`, `statusReason` and `noOp`. Existing fields are unchanged; CodeDeploy results now also carry `trigger: "codedeploy"`.
+- Terraform example `examples/terraform-ecs-native-blue-green`.
+- Optional `ecs_service_arns` and `ecs_pass_role_arns` grants in `examples/terraform`.
+
+### Changed
+
+- An event that sets both `applicationName` and `service`, or neither, is rejected with a validation error.
+- AWS SDK clients are created once per Lambda execution environment instead of on every invocation.
+
+### Fixed
+
+- When waiting, the handler now stops 5 seconds before the Lambda timeout, so the timeout error with the deployment ID and last status reaches the caller instead of a bare `Task timed out`.
+
 ## [0.1.0] - 2026-05-09
 
 ### Added

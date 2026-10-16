@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/codedeploy/types"
@@ -142,4 +143,108 @@ func strDeref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func TestEventUnmarshalECS(t *testing.T) {
+	t.Parallel()
+
+	var e Event
+	input := `{
+		"cluster": "my-cluster",
+		"service": "my-service",
+		"taskDefinition": "arn:aws:ecs:us-east-1:123456789012:task-definition/my-task:42",
+		"forceNewDeployment": true,
+		"wait": false
+	}`
+	if err := json.Unmarshal([]byte(input), &e); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if strDeref(e.Cluster) != "my-cluster" || strDeref(e.Service) != "my-service" {
+		t.Fatalf("Cluster = %q, Service = %q", strDeref(e.Cluster), strDeref(e.Service))
+	}
+	if strDeref(e.TaskDefinition) != "arn:aws:ecs:us-east-1:123456789012:task-definition/my-task:42" {
+		t.Fatalf("TaskDefinition = %q", strDeref(e.TaskDefinition))
+	}
+	if e.ForceNewDeployment == nil || !*e.ForceNewDeployment {
+		t.Fatal("ForceNewDeployment must be true")
+	}
+	if e.ShouldWait() {
+		t.Fatal("ShouldWait must be false")
+	}
+}
+
+func TestEventTrigger(t *testing.T) {
+	t.Parallel()
+
+	name := func(s string) *string { return &s }
+
+	tests := []struct {
+		name    string
+		event   Event
+		want    Trigger
+		wantErr string
+	}{
+		{name: "codedeploy", event: Event{ApplicationName: name("my-app")}, want: TriggerCodeDeploy},
+		{name: "ecs", event: Event{Service: name("my-service")}, want: TriggerECS},
+		{name: "both", event: Event{ApplicationName: name("my-app"), Service: name("my-service")}, wantErr: "mutually exclusive"},
+		{name: "neither", event: Event{}, wantErr: "is required"},
+		{name: "empty strings count as absent", event: Event{ApplicationName: name(""), Service: name("")}, wantErr: "is required"},
+		{name: "empty service with application", event: Event{ApplicationName: name("my-app"), Service: name("")}, want: TriggerCodeDeploy},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := tc.event.Trigger()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Trigger error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("Trigger = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEventShouldWaitDefault(t *testing.T) {
+	t.Parallel()
+
+	if !(Event{}).ShouldWait() {
+		t.Fatal("ShouldWait must default to true")
+	}
+}
+
+func TestResultMarshalECS(t *testing.T) {
+	t.Parallel()
+
+	arn := "arn:aws:ecs:us-east-1:123456789012:service-deployment/my-cluster/my-service/abc123"
+	r := Result{
+		DeploymentID:         arn,
+		Status:               "ROLLBACK_SUCCESSFUL",
+		CreatedAt:            "2026-10-16T10:00:00Z",
+		CompletedAt:          "2026-10-16T10:09:00Z",
+		Trigger:              TriggerECS,
+		ServiceDeploymentArn: arn,
+		LifecycleStage:       "PRODUCTION_TRAFFIC_SHIFT",
+		StatusReason:         "rolled back",
+		NoOp:                 true,
+	}
+
+	got, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	want := `{"deploymentId":"` + arn + `","status":"ROLLBACK_SUCCESSFUL","createdAt":"2026-10-16T10:00:00Z","completedAt":"2026-10-16T10:09:00Z",` +
+		`"trigger":"ecs","serviceDeploymentArn":"` + arn + `","lifecycleStage":"PRODUCTION_TRAFFIC_SHIFT","statusReason":"rolled back","noOp":true}`
+	if string(got) != want {
+		t.Fatalf("marshal output mismatch\n got: %s\nwant: %s", got, want)
+	}
 }

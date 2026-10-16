@@ -39,6 +39,8 @@ flowchart LR
     L -- "JSON result" --> TF
 ```
 
+The same Lambda also drives **Amazon ECS native deployments** — services that use the `ECS` deployment controller with any deployment strategy, including the built-in `BLUE_GREEN`. Terraform registers the new task definition, the Lambda calls `UpdateService` and waits on the service deployment that call started, and `terraform apply` fails if ECS rolls it back.
+
 ## Features
 
 - Synchronous: blocks `terraform apply` until the deployment reaches a terminal state.
@@ -46,6 +48,7 @@ flowchart LR
 - Optional fire-and-forget mode (`wait: false`).
 - Configurable poll interval (`POLL_INTERVAL_SECONDS`).
 - Forwards every CodeDeploy `CreateDeployment` knob you commonly need: description, auto-rollback, ignore application stop failures.
+- Amazon ECS native deployments (`ROLLING`, `BLUE_GREEN`, `LINEAR`, `CANARY`): `UpdateService`, then waits on the started service deployment and fails on rollback or stop.
 - Single static binary, `provided.al2023` runtime, ~5 MB zipped, supports `arm64` and `x86_64`.
 
 ## Quick start (Terraform + ECS Blue/Green)
@@ -103,14 +106,43 @@ output "deployment_id" {
 }
 ```
 
+## Quick start (Terraform + ECS native blue/green)
+
+For a service with `deployment_controller { type = "ECS" }` and `deployment_configuration { strategy = "BLUE_GREEN" }`, let Terraform ignore `task_definition` on the service and hand each new revision to the Lambda:
+
+```hcl
+resource "aws_lambda_invocation" "deploy" {
+  function_name = var.codedeploy_lambda_function_name
+
+  input = jsonencode({
+    cluster        = "my-cluster"
+    service        = "my-service"
+    taskDefinition = aws_ecs_task_definition.this.arn
+  })
+
+  triggers = {
+    task_definition_arn = aws_ecs_task_definition.this.arn
+  }
+}
+
+output "service_deployment_arn" {
+  value = jsondecode(aws_lambda_invocation.deploy.result).serviceDeploymentArn
+}
+```
+
 End-to-end runnable examples:
 
 - [`examples/terraform/`](examples/terraform) — provision the Lambda function from a release artifact.
-- [`examples/terraform-ecs-blue-green/`](examples/terraform-ecs-blue-green) — full ECS Blue/Green flow.
+- [`examples/terraform-ecs-blue-green/`](examples/terraform-ecs-blue-green) — full ECS Blue/Green flow through CodeDeploy.
+- [`examples/terraform-ecs-native-blue-green/`](examples/terraform-ecs-native-blue-green) — ECS native blue/green service driven by the ECS trigger.
 
 ## Event schema
 
-The handler accepts a JSON object whose keys match the AWS CodeDeploy `CreateDeployment` API in lower-camel-case.
+The handler accepts one of two event variants. Set exactly one of `applicationName` (CodeDeploy) and `service` (ECS); an event with both, or with neither, is rejected with a validation error.
+
+### CodeDeploy
+
+Keys match the AWS CodeDeploy `CreateDeployment` API in lower-camel-case.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -121,6 +153,26 @@ The handler accepts a JSON object whose keys match the AWS CodeDeploy `CreateDep
 | `ignoreApplicationStopFailures` | bool | no | Forwarded to `CreateDeployment`. |
 | `autoRollbackConfiguration` | object | no | CodeDeploy [`AutoRollbackConfiguration`](https://docs.aws.amazon.com/codedeploy/latest/APIReference/API_AutoRollbackConfiguration.html). |
 | `wait` | bool | no | Default `true`. Set to `false` to return immediately after `CreateDeployment` without polling. |
+
+### Amazon ECS
+
+Keys match the Amazon ECS [`UpdateService`](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_UpdateService.html) API in lower-camel-case. The service must use the `ECS` deployment controller.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cluster` | string | yes | Cluster name or ARN. |
+| `service` | string | yes | Service name or ARN. |
+| `taskDefinition` | string | yes, unless `forceNewDeployment` is `true` | `family:revision` or full ARN of the task definition to roll out. |
+| `forceNewDeployment` | bool | no | Start a new deployment even if the service definition is unchanged. |
+| `wait` | bool | no | Default `true`. Set to `false` to return right after `UpdateService` without polling. |
+
+The handler reads the service with `DescribeServices`, calls `UpdateService`, and identifies the service deployment that call started by comparing the service's `currentServiceDeployment` before and after. It then polls `DescribeServiceDeployments` every `POLL_INTERVAL_SECONDS`:
+
+- `SUCCESSFUL` returns a result.
+- `ROLLBACK_SUCCESSFUL`, `ROLLBACK_FAILED` and `STOPPED` return an error with the service deployment ARN, status, status reason and last lifecycle stage.
+- Any other status keeps polling.
+
+If `UpdateService` started no new deployment (the requested task definition is already the service's and `forceNewDeployment` is not set), the result has `noOp: true`. When the service's current deployment is still in progress, the handler waits for it like for a new one. When it already ended in a rollback or stop, the handler returns an error, because the requested revision is not known to be running; set `forceNewDeployment` to deploy it again.
 
 ## Result schema
 
@@ -135,15 +187,42 @@ The handler accepts a JSON object whose keys match the AWS CodeDeploy `CreateDep
 
 A failed deployment returns the same shape **plus** a non-empty `errorMessage` field on the Lambda invocation, which causes `aws_lambda_invocation` to fail the Terraform run.
 
+An ECS deployment returns the same keys plus the ECS details:
+
+```json
+{
+  "deploymentId": "arn:aws:ecs:us-east-1:123456789012:service-deployment/my-cluster/my-service/AbCdEf0123456789",
+  "status": "SUCCESSFUL",
+  "createdAt": "2026-05-09T10:00:00Z",
+  "completedAt": "2026-05-09T10:09:30Z",
+  "trigger": "ecs",
+  "serviceDeploymentArn": "arn:aws:ecs:us-east-1:123456789012:service-deployment/my-cluster/my-service/AbCdEf0123456789",
+  "lifecycleStage": "CLEAN_UP"
+}
+```
+
+| Field | Trigger | Description |
+|---|---|---|
+| `deploymentId` | both | CodeDeploy deployment ID, or the ECS service deployment ARN. |
+| `status` | both | Last observed status. CodeDeploy: `Created` with `wait: false`, then `Succeeded`, `Failed`, `Stopped`. ECS: `PENDING` with `wait: false` (empty for a no-op), then the service deployment status. |
+| `createdAt`, `completedAt` | both | RFC 3339 timestamps. For ECS they come from the service deployment's `createdAt` and `finishedAt` (or `stoppedAt`). |
+| `trigger` | both | `codedeploy` or `ecs`. |
+| `serviceDeploymentArn` | ECS | Service deployment the handler waited on. Omitted when the service has no deployment history. |
+| `lifecycleStage` | ECS | Last observed lifecycle stage, e.g. `BAKE_TIME`, `CLEAN_UP`. |
+| `statusReason` | ECS | Reason ECS gave for the status, if any. |
+| `noOp` | ECS | `true` when `UpdateService` started no new deployment. |
+
 ## Configuration
 
 | Env var | Default | Description |
 |---|---|---|
-| `POLL_INTERVAL_SECONDS` | `15` | Interval between `GetDeployment` polls. Lower it for faster feedback on small deployments. |
+| `POLL_INTERVAL_SECONDS` | `15` | Interval between `GetDeployment` (CodeDeploy) or `DescribeServiceDeployments` (ECS) polls. Lower it for faster feedback on small deployments. |
 
 The AWS region is taken from the standard Lambda environment — no extra variables required.
 
 ## IAM policy for the Lambda role
+
+CodeDeploy trigger:
 
 ```json
 {
@@ -168,12 +247,57 @@ The AWS region is taken from the standard Lambda environment — no extra variab
 }
 ```
 
+ECS trigger, scoped to one service:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:UpdateService"
+      ],
+      "Resource": "arn:aws:ecs:us-east-1:123456789012:service/my-cluster/my-service"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ecs:DescribeServiceDeployments",
+      "Resource": [
+        "arn:aws:ecs:us-east-1:123456789012:service/my-cluster/my-service",
+        "arn:aws:ecs:us-east-1:123456789012:service-deployment/my-cluster/my-service/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::123456789012:role/my-service-task",
+        "arn:aws:iam::123456789012:role/my-service-execution"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+```
+
+`DescribeServiceDeployments` is authorized against both the service and the service deployment resource, so it needs both ARNs. The [Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html) lists `iam:PassRole` (with `iam:PassedToService` `ecs-tasks.amazonaws.com` or `ecs.amazonaws.com`) among the permissions `UpdateService` authorizes, but the AWS documentation does not say whether it is evaluated for a request that only changes the task definition. Grant it for the task role and task execution role of the task definitions you deploy, as above. The Lambda never passes the ECS infrastructure role for load balancers, because it does not send `loadBalancers` to `UpdateService`.
+
 Plus the standard `AWSLambdaBasicExecutionRole` for CloudWatch Logs.
 
 ## Known constraints
 
 - **AWS Lambda hard limit of 15 minutes.** If your deployment can take longer (large fleets, slow Blue/Green traffic shifts), either tune CodeDeploy `wait_time_in_minutes` and the deployment configuration to fit, or invoke the Lambda with `wait: false` and poll deployment status from elsewhere.
 - `aws_lambda_invocation` re-runs on **every** change to its `triggers` map. Keep `triggers` precise (e.g. `task_definition_arn`) to avoid spurious deployments.
+- When it waits, the handler stops 5 seconds before the Lambda timeout so the error with the deployment ID and last status reaches the caller instead of a bare `Task timed out`.
+- ECS native blue/green: task start-up, test and production traffic shifts, lifecycle hooks and `bakeTimeInMinutes` must all fit into one invocation.
+- ECS detects failed deployments with the [deployment circuit breaker or CloudWatch alarms](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-failure-detection.html). Enable one of them with rollback on the service so a bad revision ends in `ROLLBACK_SUCCESSFUL` and fails the apply.
+- The ECS trigger needs the `ECS` deployment controller. Services on `CODE_DEPLOY` use the CodeDeploy trigger; `EXTERNAL` is not supported.
 
 ## Releases
 

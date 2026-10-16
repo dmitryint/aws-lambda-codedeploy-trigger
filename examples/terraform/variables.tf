@@ -33,13 +33,30 @@ variable "memory_size" {
 }
 
 variable "poll_interval_seconds" {
-  description = "Interval between CodeDeploy GetDeployment polls."
+  description = "Interval between deployment status polls (CodeDeploy GetDeployment or ECS DescribeServiceDeployments)."
   type        = number
   default     = 15
 }
 
 variable "codedeploy_service_role_arns" {
   description = "ARNs of CodeDeploy service roles the Lambda is allowed to PassRole. Leave empty to skip the iam:PassRole grant."
+  type        = list(string)
+  default     = []
+}
+
+variable "ecs_service_arns" {
+  description = "ARNs of ECS services the Lambda may update and whose service deployments it may describe. Leave empty to skip the ECS grants."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for arn in var.ecs_service_arns : can(regex("^arn:[^:]+:ecs:[^:]+:[0-9]{12}:service/[^/]+/[^/]+$", arn))])
+    error_message = "ecs_service_arns must be ECS service ARNs in the form arn:aws:ecs:<region>:<account>:service/<cluster>/<service>."
+  }
+}
+
+variable "ecs_pass_role_arns" {
+  description = "ARNs of task roles and task execution roles the Lambda may pass to ECS. Leave empty to skip this iam:PassRole grant."
   type        = list(string)
   default     = []
 }
