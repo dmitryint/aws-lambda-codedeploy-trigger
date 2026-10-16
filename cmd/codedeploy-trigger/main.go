@@ -17,6 +17,7 @@ import (
 const (
 	defaultPollInterval = 15 * time.Second
 	pollIntervalEnv     = "POLL_INTERVAL_SECONDS"
+	deadlineMargin      = 5 * time.Second
 )
 
 // revision is overridden at link time via -ldflags "-X main.revision=...".
@@ -40,7 +41,20 @@ type handler struct {
 }
 
 func (h handler) handleRequest(ctx context.Context, event deploy.Event) (deploy.Result, error) {
+	if shouldWait(event) {
+		var cancel context.CancelFunc
+		ctx, cancel = withDeadlineMargin(ctx)
+		defer cancel()
+	}
 	return runCodeDeploy(ctx, h.codeDeploy, event, h.pollInterval)
+}
+
+func withDeadlineMargin(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) <= deadlineMargin {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline.Add(-deadlineMargin))
 }
 
 func main() {

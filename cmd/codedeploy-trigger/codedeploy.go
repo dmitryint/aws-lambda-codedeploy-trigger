@@ -27,15 +27,20 @@ func waitForDeployment(ctx context.Context, svc codeDeployAPI, deploymentID stri
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var last *types.DeploymentInfo
 	for {
 		out, err := svc.GetDeployment(ctx, &codedeploy.GetDeploymentInput{
 			DeploymentId: aws.String(deploymentID),
 		})
+		if err != nil && ctx.Err() != nil {
+			return last, deploymentTimeoutError(ctx, deploymentID, last)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("get deployment %s: %w", deploymentID, err)
 		}
 
 		info := out.DeploymentInfo
+		last = info
 		log.Printf("deployment %s status: %s", deploymentID, info.Status)
 
 		switch info.Status {
@@ -53,10 +58,18 @@ func waitForDeployment(ctx context.Context, svc codeDeployAPI, deploymentID stri
 		case <-ctx.Done():
 			// Surface a structured error including the deployment ID so the
 			// caller (e.g. Terraform) can investigate the in-flight deployment.
-			return info, fmt.Errorf("context canceled while waiting for deployment %s (last status: %s): %w", deploymentID, info.Status, ctx.Err())
+			return info, deploymentTimeoutError(ctx, deploymentID, info)
 		case <-ticker.C:
 		}
 	}
+}
+
+func deploymentTimeoutError(ctx context.Context, deploymentID string, last *types.DeploymentInfo) error {
+	status := "unknown"
+	if last != nil {
+		status = string(last.Status)
+	}
+	return fmt.Errorf("context canceled while waiting for deployment %s (last status: %s): %w", deploymentID, status, ctx.Err())
 }
 
 func runCodeDeploy(ctx context.Context, svc codeDeployAPI, event deploy.Event, interval time.Duration) (deploy.Result, error) {
