@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-lambda-go v1.55.1
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.5
-	github.com/aws/aws-sdk-go-v2/service/codedeploy v1.45.1
+	github.com/aws/aws-sdk-go-v2/service/codedeploy v1.45.2
 )
 
 require (
