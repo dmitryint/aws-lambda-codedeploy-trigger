@@ -174,6 +174,7 @@ Plus the standard `AWSLambdaBasicExecutionRole` for CloudWatch Logs.
 
 - **AWS Lambda hard limit of 15 minutes.** If your deployment can take longer (large fleets, slow Blue/Green traffic shifts), either tune CodeDeploy `wait_time_in_minutes` and the deployment configuration to fit, or invoke the Lambda with `wait: false` and poll deployment status from elsewhere.
 - `aws_lambda_invocation` re-runs on **every** change to its `triggers` map. Keep `triggers` precise (e.g. `task_definition_arn`) to avoid spurious deployments.
+- When it waits, the handler stops 5 seconds before the Lambda timeout so the error with the deployment ID and last status reaches the caller instead of a bare `Task timed out`.
 
 ## Releases
 
